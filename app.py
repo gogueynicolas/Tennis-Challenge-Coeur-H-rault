@@ -72,7 +72,7 @@ def _etat_vide() -> dict:
         "tournois_meta": {},
         "clubs": list(cc.CHALLENGE_CLUBS_DEFAUT),
         "serie_mapping": {k: list(v) for k, v in cc.SERIE_MAPPING_DEFAUT.items()},
-        "participation": "inscrit",
+        "participation": "joue",
         "arrondi": "exact",
         "n_master": 8,
     }
@@ -129,7 +129,7 @@ ss.setdefault("tournois_data", {})
 ss.setdefault("tournois_meta", {})
 ss.setdefault("clubs",         list(cc.CHALLENGE_CLUBS_DEFAUT))
 ss.setdefault("serie_mapping", {k: list(v) for k, v in cc.SERIE_MAPPING_DEFAUT.items()})
-ss.setdefault("participation", "inscrit")
+ss.setdefault("participation", "joue")
 ss.setdefault("arrondi",       "exact")
 ss.setdefault("n_master",      8)
 
@@ -235,7 +235,7 @@ with st.sidebar:
             ["inscrit", "joue"],
             format_func=lambda x: {"inscrit": "Inscrit",
                                    "joue": "A joué ≥ 1 match"}[x],
-            index=0 if ss["participation"] == "inscrit" else 1,
+            index=1 if ss["participation"] == "joue" else 0,
             disabled=ss["mode_archive"])
 
         ss["arrondi"] = st.selectbox(

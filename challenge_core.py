@@ -214,7 +214,7 @@ def _arrondi_moitie(x, mode="exact"):
     return round(x / 2.0)  # "proche"
 
 
-def compute_standings(tournois_data, ordre_ids, participation="inscrit",
+def compute_standings(tournois_data, ordre_ids, participation="joue",
                       mode_arrondi="exact"):
     """
     tournois_data : { tournoi_id : { licence : infos_parse } }
