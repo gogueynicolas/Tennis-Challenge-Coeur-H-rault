@@ -60,10 +60,34 @@ def verifier_mdp(mdp: str) -> bool:
 
 
 # ============================================================================
-# Sauvegarde / chargement automatique
+# Sauvegarde / chargement automatique  (dossier data/ + sauvegardes de secours)
 # ============================================================================
+DATA_DIR = "data"
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
 def _fichier_sauvegarde(annee: int) -> str:
-    return f"challenge_sauvegarde_{annee}.json"
+    return os.path.join(DATA_DIR, f"challenge_{annee}.json")
+
+
+def _migrer_anciens_fichiers():
+    """Déplace les anciens challenge_sauvegarde_AAAA.json à la racine vers data/."""
+    for fname in os.listdir("."):
+        if fname.startswith("challenge_sauvegarde_") and fname.endswith(".json"):
+            try:
+                a = int(fname.replace("challenge_sauvegarde_", "").replace(".json", ""))
+            except ValueError:
+                continue
+            dest = _fichier_sauvegarde(a)
+            if not os.path.exists(dest):
+                try:
+                    with open(fname, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    with open(dest, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
 
 
 def _etat_vide() -> dict:
@@ -92,23 +116,70 @@ def charger_etat(annee: int) -> dict:
 
 
 def sauvegarder_etat(etat: dict) -> None:
-    path = _fichier_sauvegarde(etat.get("annee", ANNEE_EN_COURS))
+    annee = etat.get("annee", ANNEE_EN_COURS)
+    path = _fichier_sauvegarde(annee)
     try:
+        # Sauvegarde de secours horodatée (max 10 par année conservées)
+        if os.path.exists(path):
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            bkp = os.path.join(BACKUP_DIR, f"challenge_{annee}_{ts}.json")
+            try:
+                os.replace(path, bkp) if False else None  # garder l'original
+                import shutil
+                shutil.copy2(path, bkp)
+                _nettoyer_backups(annee, garder=10)
+            except Exception:
+                pass
         with open(path, "w", encoding="utf-8") as f:
             json.dump(etat, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.warning(f"Sauvegarde impossible : {e}")
 
 
+def _nettoyer_backups(annee: int, garder: int = 10):
+    prefixe = f"challenge_{annee}_"
+    fichiers = sorted([f for f in os.listdir(BACKUP_DIR)
+                       if f.startswith(prefixe)], reverse=True)
+    for f in fichiers[garder:]:
+        try:
+            os.remove(os.path.join(BACKUP_DIR, f))
+        except Exception:
+            pass
+
+
 def annees_archivees() -> list:
+    _migrer_anciens_fichiers()
     annees = []
-    for fname in os.listdir("."):
-        if fname.startswith("challenge_sauvegarde_") and fname.endswith(".json"):
-            try:
-                annees.append(int(fname.replace("challenge_sauvegarde_", "").replace(".json", "")))
-            except ValueError:
-                pass
-    return sorted(annees, reverse=True)
+    if os.path.isdir(DATA_DIR):
+        for fname in os.listdir(DATA_DIR):
+            if fname.startswith("challenge_") and fname.endswith(".json"):
+                try:
+                    annees.append(int(fname.replace("challenge_", "").replace(".json", "")))
+                except ValueError:
+                    pass
+    return sorted(set(annees), reverse=True)
+
+
+def charger_historique_complet() -> dict:
+    """
+    Charge toutes les années et calcule resultats + clubs pour chacune.
+    Retourne {annee: {"resultats": [...], "clubs": [...], "etat": {...}}}.
+    """
+    hist = {}
+    for annee in annees_archivees():
+        etat = charger_etat(annee)
+        td = etat.get("tournois_data", {})
+        if not td:
+            continue
+        try:
+            res, clubs = cc.compute_standings(
+                td, ORDRE_IDS,
+                participation=etat.get("participation", "joue"),
+                mode_arrondi=etat.get("arrondi", "exact"))
+            hist[annee] = {"resultats": res, "clubs": clubs, "etat": etat}
+        except Exception:
+            pass
+    return hist
 
 
 # ============================================================================
@@ -214,10 +285,25 @@ with st.sidebar:
         st.divider()
         st.subheader("⚙️ Configuration")
 
-        with st.expander("Clubs du challenge", expanded=False):
+        with st.expander(f"Clubs du challenge ({len(ss['clubs'])})",
+                         expanded=False):
+            if not ss["mode_archive"]:
+                st.caption("Ajouter un club (nom exact de la colonne « Club »)")
+                nouveau = st.text_input("Nouveau club", key="add_club",
+                                        label_visibility="collapsed",
+                                        placeholder="ex : TC NOUVEAU CLUB")
+                if st.button("➕ Ajouter ce club", width='stretch'):
+                    n = nouveau.strip()
+                    if n and n not in ss["clubs"]:
+                        ss["clubs"].append(n)
+                        _autosave()
+                        st.success(f"Club « {n} » ajouté.")
+                        st.rerun()
+                    elif n in ss["clubs"]:
+                        st.warning("Ce club est déjà présent.")
             clubs_txt = st.text_area(
-                "Un club par ligne",
-                value="\n".join(ss["clubs"]), height=160,
+                "Liste complète (modifiable, un club par ligne)",
+                value="\n".join(ss["clubs"]), height=200,
                 disabled=ss["mode_archive"])
             if not ss["mode_archive"]:
                 ss["clubs"] = [c.strip() for c in clubs_txt.splitlines() if c.strip()]
@@ -470,14 +556,15 @@ def table_serie(genre: str, serie: str, club_filtre=None):
 
 # ── Onglets (communs aux deux vues, + 2 onglets admin) ──────────────────────
 LABELS = ["👨 Hommes", "👩 Femmes", "🏛️ Clubs", "🏆 Master",
-          "📊 Stats", "🔍 Fiche joueur", "📈 Course master", "⚖️ Comparateur"]
+          "📊 Stats", "🔍 Fiche joueur", "📈 Course master", "⚖️ Comparateur",
+          "📅 Historique"]
 if ss["est_admin"]:
     LABELS += ["🔎 Détail / export", "🖼️ Images"]
 
 tabs = st.tabs(LABELS)
-tab_h, tab_f, tab_clubs, tab_master, tab_stats, tab_fiche, tab_course, tab_comp = tabs[:8]
-tab_detail = tabs[8] if ss["est_admin"] else None
-tab_img    = tabs[9] if ss["est_admin"] else None
+tab_h, tab_f, tab_clubs, tab_master, tab_stats, tab_fiche, tab_course, tab_comp, tab_hist = tabs[:9]
+tab_detail = tabs[9] if ss["est_admin"] else None
+tab_img    = tabs[10] if ss["est_admin"] else None
 
 
 # ── Hommes / Femmes (avec filtre club) ──────────────────────────────────────
@@ -589,6 +676,20 @@ with tab_stats:
             gk.columns = ["Vainqueur", "Clt", "Adversaire", "Clt adv.",
                           "Score", "Tournoi"]
             st.dataframe(gk, hide_index=True, width='stretch')
+
+        st.divider()
+        st.markdown("**🚫 Joueurs des clubs hors challenge** "
+                    "(écartés à l'import, par club)")
+        hors = cs.clubs_hors_challenge(ss["tournois_meta"])
+        if hors:
+            hdf = pd.DataFrame([{"Club": d["club"], "Présences (total)": d["total"]}
+                                for d in hors])
+            st.dataframe(hdf, hide_index=True, width='stretch')
+            st.caption(f"{len(hors)} clubs hors challenge · "
+                       f"{sum(d['total'] for d in hors)} présences écartées au total. "
+                       "Une présence = un joueur inscrit à un tournoi.")
+        else:
+            st.caption("Aucun joueur hors challenge écarté.")
 
 # ── Fiche joueur ─────────────────────────────────────────────────────────────
 with tab_fiche:
@@ -729,6 +830,79 @@ with tab_comp:
                 f"{d2['total']:g}", str(dom_par_lic.get(opts[j2], "—"))],
         })
         st.dataframe(comp, hide_index=True, width='stretch')
+
+
+# ── Historique multi-années ──────────────────────────────────────────────────
+with tab_hist:
+    historique = charger_historique_complet()
+    if len(historique) < 1:
+        st.info("Aucune saison archivée pour l'instant. "
+                "L'historique se remplit automatiquement à chaque saison.")
+    else:
+        annees_dispo = sorted(historique.keys())
+        st.caption(f"Saisons disponibles : {', '.join(map(str, annees_dispo))}")
+
+        pm = cs.palmares_multi_annees(historique)
+
+        # Participation & points par année
+        st.subheader("📊 Évolution générale")
+        eg = pd.DataFrame({
+            "Année": annees_dispo,
+            "Joueurs classés": [pm["participation"].get(a, 0) for a in annees_dispo],
+            "Total points distribués": [pm["points_annee"].get(a, 0) for a in annees_dispo],
+        })
+        ca, cb = st.columns(2)
+        with ca:
+            st.markdown("**Nombre de joueurs classés**")
+            st.bar_chart(eg.set_index("Année")["Joueurs classés"])
+        with cb:
+            st.markdown("**Points distribués**")
+            st.bar_chart(eg.set_index("Année")["Total points distribués"])
+
+        # Palmarès par genre/série
+        st.divider()
+        st.subheader("🏆 Palmarès (vainqueurs par an)")
+        for genre in ["Hommes", "Femmes"]:
+            for s in ["2e", "3e", "4e", "1re"]:
+                lignes = pm["palmares"].get((genre, s))
+                if lignes:
+                    st.markdown(f"**{genre} — {s} série**")
+                    pdf = pd.DataFrame(lignes)[["annee", "nom", "club", "total"]]
+                    pdf.columns = ["Année", "Vainqueur", "Club", "Total"]
+                    st.dataframe(pdf, hide_index=True, width='stretch')
+
+        # Classement cumulé des clubs
+        st.divider()
+        st.subheader("🏛️ Classement cumulé des clubs (toutes saisons)")
+        cm = cs.clubs_multi_annees(historique)
+        if cm:
+            rows = []
+            for d in cm:
+                row = {"Rang": d["rang"], "Club": d["club"],
+                       "Saisons": d["annees"], "Total cumulé": d["total"]}
+                for a in annees_dispo:
+                    row[str(a)] = round(d["detail"].get(a, 0), 1)
+                rows.append(row)
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+
+        # Progression d'un joueur sur plusieurs années
+        st.divider()
+        st.subheader("📈 Progression d'un joueur sur plusieurs années")
+        noms_hist = cs.liste_joueurs_historique(historique)
+        if noms_hist:
+            joueur_sel = st.selectbox("Joueur", noms_hist, key="hist_joueur")
+            suivi = cs.progression_joueur_multi_annees(historique, joueur_sel)
+            if suivi:
+                sdf = pd.DataFrame(suivi)[
+                    ["annee", "club", "genre", "serie",
+                     "clt_inscription", "clt_actuel", "nb_tournois", "total"]]
+                sdf.columns = ["Année", "Club", "Genre", "Série",
+                               "Clt insc.", "Clt actuel", "Tournois", "Total"]
+                st.dataframe(sdf, hide_index=True, width='stretch')
+                if len(suivi) > 1:
+                    st.line_chart(
+                        pd.DataFrame({"Total": [s["total"] for s in suivi]},
+                                     index=[str(s["annee"]) for s in suivi]))
 
 
 # ── Détail / export (admin seulement) ────────────────────────────────────────

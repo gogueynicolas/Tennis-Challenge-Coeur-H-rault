@@ -302,3 +302,106 @@ def course_master(tournois_data, ordre_ids, serie_finale_par_lic):
             pts.append(cumul)
         courbes[lic] = pts
     return ordre, courbes
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MULTI-ANNÉES
+# ═══════════════════════════════════════════════════════════════════════════
+
+def clubs_hors_challenge(tournois_meta) -> list:
+    """
+    Agrège le nombre de joueurs des clubs NON membres du challenge
+    (= clubs supprimés à l'import), tous tournois confondus.
+    tournois_meta : {tid: {"nom":..., "rapport": {"clubs_supprimes": {...}}}}
+    Le total dédoublonne par max (un même club revient à chaque tournoi).
+    """
+    par_club = {}
+    for tid, meta in tournois_meta.items():
+        supp = meta.get("rapport", {}).get("clubs_supprimes", {})
+        for club, n in supp.items():
+            d = par_club.setdefault(club, {"club": club, "total": 0,
+                                           "par_tournoi": {}})
+            d["par_tournoi"][tid] = n
+            d["total"] += n
+    # total = somme des présences (un joueur peut jouer plusieurs tournois)
+    res = sorted(par_club.values(), key=lambda d: -d["total"])
+    return res
+
+
+def palmares_multi_annees(historique: dict) -> dict:
+    """
+    historique : {annee: {"resultats": [...], "clubs": [...]}}
+    Retourne, par (genre, série), le vainqueur de chaque année + stats globales.
+    """
+    palmares = {}          # (genre, serie) -> [ {annee, nom, club, total} ]
+    participation = {}     # annee -> nb joueurs
+    points_annee = {}      # annee -> total points distribués
+
+    for annee in sorted(historique.keys()):
+        resultats = historique[annee].get("resultats", [])
+        participation[annee] = len(resultats)
+        points_annee[annee] = round(sum(d["total"] for d in resultats), 1)
+        # vainqueur par genre/série
+        groupes = {}
+        for d in resultats:
+            groupes.setdefault((d["genre"], d["serie"]), []).append(d)
+        for key, joueurs in groupes.items():
+            if not key[0] or not key[1]:
+                continue
+            best = max(joueurs, key=lambda d: d["total"])
+            palmares.setdefault(key, []).append({
+                "annee": annee,
+                "nom": f"{best['nom']} {best['prenom']}",
+                "club": best["club"], "total": best["total"],
+            })
+    return {"palmares": palmares,
+            "participation": participation,
+            "points_annee": points_annee}
+
+
+def clubs_multi_annees(historique: dict) -> list:
+    """Classement cumulé des clubs sur toutes les années."""
+    cumul = {}
+    for annee in sorted(historique.keys()):
+        for c in historique[annee].get("clubs", []):
+            d = cumul.setdefault(c["club"], {"club": c["club"], "total": 0,
+                                             "annees": 0, "detail": {}})
+            d["total"] += c["total"]
+            d["annees"] += 1
+            d["detail"][annee] = c["total"]
+    res = sorted(cumul.values(), key=lambda d: -d["total"])
+    for i, d in enumerate(res, 1):
+        d["rang"] = i
+        d["total"] = round(d["total"], 1)
+    return res
+
+
+def progression_joueur_multi_annees(historique: dict, nom_complet: str) -> list:
+    """
+    Suit un joueur (par nom complet 'NOM Prénom') sur plusieurs années.
+    Retourne une ligne par année où il apparaît.
+    """
+    suivi = []
+    cible = nom_complet.strip().lower()
+    for annee in sorted(historique.keys()):
+        for d in historique[annee].get("resultats", []):
+            nc = f"{d['nom']} {d['prenom']}".strip().lower()
+            if nc == cible:
+                suivi.append({
+                    "annee": annee, "club": d["club"], "genre": d["genre"],
+                    "serie": d["serie"], "nb_tournois": d["nb_tournois"],
+                    "total": d["total"],
+                    "clt_inscription": d.get("classement_inscription", ""),
+                    "clt_actuel": d.get("classement_actuel", ""),
+                })
+                break
+    return suivi
+
+
+def liste_joueurs_historique(historique: dict) -> list:
+    """Tous les noms de joueurs ayant participé, toutes années confondues."""
+    noms = set()
+    for annee in historique:
+        for d in historique[annee].get("resultats", []):
+            noms.add(f"{d['nom']} {d['prenom']}".strip())
+    return sorted(noms)
