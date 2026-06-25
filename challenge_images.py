@@ -72,6 +72,7 @@ def _serie_color(serie: str) -> str:
 FORMATS = {
     "social": {"px": (1080, 1080), "dpi": 96},
     "print":  {"px": (2480, 3508), "dpi": 300},
+    "story":  {"px": (1080, 1920), "dpi": 96},
 }
 
 
@@ -497,6 +498,95 @@ def image_master(
 
     fig.text(0.5, 0.015,
              "2 pts/victoire  ·  bonus = (tournois − 1) × 3  ·  Challenge Cœur d'Hérault",
+             ha="center", va="bottom", color=C_SUBTEXT, fontsize=fs_small * 0.85)
+
+    return _fig_to_bytes(fig)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. FICHE JOUEUR (carte individuelle, idéale story / partage)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def image_fiche_joueur(fiche: dict, tournois_affiches, fmt: str = "story") -> bytes:
+    """
+    Carte individuelle d'un joueur.
+    fiche attend les clés : nom, prenom, club, serie, genre, rang,
+      clt_inscription, clt_actuel, nb_tournois, victoires, points_match,
+      bonus, total, domination (ou None).
+    """
+    w, h = _fig_size(fmt)
+    dpi = FORMATS[fmt]["dpi"]
+    fig, ax = plt.subplots(figsize=(w, h), dpi=dpi)
+    fig.patch.set_facecolor(C_BG)
+    ax.set_facecolor(C_BG)
+    ax.axis("off")
+
+    scale = w / 11.25
+    fs_title = FONT_TITLE * scale
+    fs_sub   = FONT_SUB   * scale
+    fs_tab   = FONT_TABLE * scale
+    fs_small = FONT_SMALL * scale
+
+    serie_c = _serie_color(fiche.get("serie"))
+
+    # En-tête
+    fig.text(0.5, 0.96, "🎾 Challenge Cœur d'Hérault",
+             ha="center", va="top", color=C_ACCENT,
+             fontsize=fs_title, fontweight="bold")
+    tournois_str = " · ".join(tournois_affiches) if tournois_affiches else "—"
+    fig.text(0.5, 0.925, tournois_str, ha="center", va="top",
+             color=C_SUBTEXT, fontsize=fs_small)
+
+    # Bandeau nom
+    y = 0.86
+    fig.text(0.5, y, f"{fiche['prenom']} {fiche['nom']}".strip(),
+             ha="center", va="center", color=C_TEXT,
+             fontsize=fs_title * 1.3, fontweight="bold")
+    fig.text(0.5, y - 0.045, fiche.get("club", ""),
+             ha="center", va="center", color=C_SUBTEXT, fontsize=fs_sub)
+
+    # Pastille rang + série
+    rang = fiche.get("rang")
+    if rang:
+        fig.text(0.5, y - 0.10,
+                 f"{rang}{'er' if rang == 1 else 'e'} — {fiche.get('serie','?')} série "
+                 f"({fiche.get('genre','')})",
+                 ha="center", va="center", color=serie_c,
+                 fontsize=fs_sub * 1.1, fontweight="bold")
+
+    # Grand total
+    fig.text(0.5, 0.66, _pts_label(fiche),
+             ha="center", va="center", color=C_ACCENT,
+             fontsize=fs_title * 2.0, fontweight="bold")
+    fig.text(0.5, 0.605, "points au total",
+             ha="center", va="center", color=C_SUBTEXT, fontsize=fs_tab)
+
+    # Tableau de stats clés
+    lignes = [
+        ("Tournois disputés",  str(fiche.get("nb_tournois", "—"))),
+        ("Matchs gagnés",      str(fiche.get("victoires", "—"))),
+        ("Points de match",    f"{fiche.get('points_match', 0):g}"),
+        ("Points bonus",       f"{fiche.get('bonus', 0):g}"),
+        ("Classement",         f"{fiche.get('clt_inscription','?')} → {fiche.get('clt_actuel','?')}"),
+    ]
+    if fiche.get("domination") is not None:
+        lignes.append(("Jeux gagnés", f"{fiche['domination']}%"))
+
+    y0 = 0.50
+    dy = 0.058
+    for i, (k, v) in enumerate(lignes):
+        yy = y0 - i * dy
+        bg = C_ROW_ODD if i % 2 == 0 else C_ROW_EVEN
+        axr = fig.add_axes([0.12, yy - dy * 0.42, 0.76, dy * 0.8])
+        axr.set_facecolor(bg)
+        axr.axis("off")
+        fig.text(0.16, yy, k, ha="left", va="center",
+                 color=C_SUBTEXT, fontsize=fs_tab)
+        fig.text(0.84, yy, v, ha="right", va="center",
+                 color=C_TEXT, fontsize=fs_tab, fontweight="bold")
+
+    fig.text(0.5, 0.02,
+             "2 pts/victoire · bonus = (tournois − 1) × 3 · Challenge Cœur d'Hérault",
              ha="center", va="bottom", color=C_SUBTEXT, fontsize=fs_small * 0.85)
 
     return _fig_to_bytes(fig)

@@ -13,6 +13,7 @@ import json, io, zipfile, os, datetime, hashlib
 import pandas as pd
 import streamlit as st
 import challenge_core as cc
+import challenge_stats as cs
 
 st.set_page_config(page_title="Challenge Cœur d'Hérault",
                    page_icon="🎾", layout="wide")
@@ -70,6 +71,7 @@ def _etat_vide() -> dict:
         "annee": ANNEE_EN_COURS,
         "tournois_data": {},
         "tournois_meta": {},
+        "tournois_matchs": {},
         "clubs": list(cc.CHALLENGE_CLUBS_DEFAUT),
         "serie_mapping": {k: list(v) for k, v in cc.SERIE_MAPPING_DEFAUT.items()},
         "participation": "joue",
@@ -127,6 +129,7 @@ ss.setdefault("mode_archive",  False)
 ss.setdefault("est_admin",     False)
 ss.setdefault("tournois_data", {})
 ss.setdefault("tournois_meta", {})
+ss.setdefault("tournois_matchs", {})
 ss.setdefault("clubs",         list(cc.CHALLENGE_CLUBS_DEFAUT))
 ss.setdefault("serie_mapping", {k: list(v) for k, v in cc.SERIE_MAPPING_DEFAUT.items()})
 ss.setdefault("participation", "joue")
@@ -139,6 +142,7 @@ def _etat_courant() -> dict:
         "annee":         ss.get("annee_active", ANNEE_EN_COURS),
         "tournois_data": ss["tournois_data"],
         "tournois_meta": ss["tournois_meta"],
+        "tournois_matchs": ss["tournois_matchs"],
         "clubs":         ss["clubs"],
         "serie_mapping": ss["serie_mapping"],
         "participation": ss["participation"],
@@ -380,6 +384,7 @@ if ss["est_admin"] and not ss["mode_archive"]:
                 ss["tournois_data"][tid] = data
                 ss["tournois_meta"][tid] = {"nom": NOM_PAR_ID[tid],
                                             "rapport": rapport}
+                ss["tournois_matchs"][tid] = cs.build_records(dm, data, tid)
                 _autosave()
                 st.success(f"« {NOM_PAR_ID[tid]} » enregistré.")
                 st.rerun()
@@ -400,6 +405,7 @@ if ss["est_admin"] and not ss["mode_archive"]:
             if cb.button("🗑️ Retirer", key=f"del_{i}"):
                 ss["tournois_data"].pop(i, None)
                 ss["tournois_meta"].pop(i, None)
+                ss["tournois_matchs"].pop(i, None)
                 _autosave()
                 st.rerun()
 
@@ -434,9 +440,20 @@ resultats, clubs = cc.compute_standings(
 
 df = pd.DataFrame(resultats)
 
+# Fiches de match (toutes) + statistiques
+match_records = []
+for _t in ORDRE_IDS:
+    match_records.extend(ss["tournois_matchs"].get(_t, []))
+stats = cs.compute_stats(resultats, match_records) if match_records else None
+dom_par_lic = {d["licence"]: d["ratio"] for d in stats["domination"]} if stats else {}
 
-def table_serie(genre: str, serie: str):
+SERIES = ["2e", "3e", "4e", "1re"]
+
+
+def table_serie(genre: str, serie: str, club_filtre=None):
     sub = df[(df["genre"] == genre) & (df["serie"] == serie)].copy()
+    if club_filtre and club_filtre != "Tous les clubs":
+        sub = sub[sub["club"] == club_filtre]
     if sub.empty:
         st.caption("— aucun joueur —")
         return
@@ -451,30 +468,32 @@ def table_serie(genre: str, serie: str):
     st.dataframe(show, hide_index=True, width='stretch')
 
 
-# ── Onglets : différents selon le mode ──────────────────────────────────────
+# ── Onglets (communs aux deux vues, + 2 onglets admin) ──────────────────────
+LABELS = ["👨 Hommes", "👩 Femmes", "🏛️ Clubs", "🏆 Master",
+          "📊 Stats", "🔍 Fiche joueur", "📈 Course master", "⚖️ Comparateur"]
 if ss["est_admin"]:
-    tabs = st.tabs(["👨 Hommes", "👩 Femmes", "🏛️ Clubs", "🏆 Master",
-                    "🔎 Détail / export", "🖼️ Images"])
-    tab_h, tab_f, tab_clubs, tab_master, tab_detail, tab_img = tabs
-else:
-    tabs = st.tabs(["👨 Hommes", "👩 Femmes", "🏛️ Clubs", "🏆 Master"])
-    tab_h, tab_f, tab_clubs, tab_master = tabs
-    tab_detail = tab_img = None
+    LABELS += ["🔎 Détail / export", "🖼️ Images"]
+
+tabs = st.tabs(LABELS)
+tab_h, tab_f, tab_clubs, tab_master, tab_stats, tab_fiche, tab_course, tab_comp = tabs[:8]
+tab_detail = tabs[8] if ss["est_admin"] else None
+tab_img    = tabs[9] if ss["est_admin"] else None
 
 
-# ── Hommes ───────────────────────────────────────────────────────────────────
-with tab_h:
-    for s in ["2e", "3e", "4e", "1re"]:
-        if not df[(df["genre"] == "Hommes") & (df["serie"] == s)].empty:
-            st.subheader(f"{s} série")
-            table_serie("Hommes", s)
+# ── Hommes / Femmes (avec filtre club) ──────────────────────────────────────
+def render_genre(tab, genre):
+    with tab:
+        clubs_dispo = ["Tous les clubs"] + sorted(
+            {d["club"] for d in resultats if d["genre"] == genre})
+        cf = st.selectbox("Filtrer par club", clubs_dispo, key=f"cf_{genre}")
+        for s in SERIES:
+            if not df[(df["genre"] == genre) & (df["serie"] == s)].empty:
+                st.subheader(f"{s} série")
+                table_serie(genre, s, cf)
 
-# ── Femmes ───────────────────────────────────────────────────────────────────
-with tab_f:
-    for s in ["2e", "3e", "4e", "1re"]:
-        if not df[(df["genre"] == "Femmes") & (df["serie"] == s)].empty:
-            st.subheader(f"{s} série")
-            table_serie("Femmes", s)
+
+render_genre(tab_h, "Hommes")
+render_genre(tab_f, "Femmes")
 
 # ── Clubs ────────────────────────────────────────────────────────────────────
 with tab_clubs:
@@ -489,7 +508,7 @@ with tab_master:
     st.caption(f"Top {ss['n_master']} par genre et par série.")
     master = cc.selection_master(resultats, ss["n_master"])
     for genre in ["Hommes", "Femmes"]:
-        for s in ["2e", "3e", "4e", "1re"]:
+        for s in SERIES:
             joueurs = master.get((genre, s))
             if joueurs:
                 st.subheader(f"{genre} — {s} série")
@@ -502,6 +521,214 @@ with tab_master:
                                "Clt inscription", "Clt actuel",
                                "Tournois", "Total"]
                 st.dataframe(mdf, hide_index=True, width='stretch')
+
+# ── Statistiques ─────────────────────────────────────────────────────────────
+with tab_stats:
+    if not stats:
+        st.info("Les statistiques apparaîtront une fois des matchs importés.")
+    else:
+        st.subheader("🏅 Faits marquants")
+        ca, cb = st.columns(2)
+        with ca:
+            if stats["giant_kills"]:
+                g = stats["giant_kills"][0]
+                st.metric("💥 Plus gros exploit",
+                          f"{g['nom_g']} ({g['clt_g']})",
+                          f"bat {g['nom_p']} ({g['clt_p']}) · {g['score']}")
+            if stats["match_net"]:
+                mn = stats["match_net"]
+                st.metric("🎯 Victoire la plus nette",
+                          mn["nom_g"], f"{mn['score']} vs {mn['nom_p']}")
+        with cb:
+            if stats["progressions"]:
+                p = stats["progressions"][0]
+                st.metric("📈 Meilleure progression",
+                          p["nom"], f"{p['de']} → {p['vers']}")
+            if stats["match_serre"]:
+                msr = stats["match_serre"]
+                st.metric("🔥 Match le plus serré",
+                          msr["score"], f"{msr['nom_g']} vs {msr['nom_p']}")
+
+        st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**👑 Indice de domination** (% de jeux gagnés, min. 2 matchs)")
+            dd = pd.DataFrame(stats["domination"][:15])
+            if not dd.empty:
+                dd = dd[["nom", "club", "matchs", "ratio"]]
+                dd.columns = ["Joueur", "Club", "Matchs", "% jeux"]
+                st.dataframe(dd, hide_index=True, width='stretch')
+        with c2:
+            st.markdown("**🥯 Bagels infligés** (sets 6/0)")
+            bb = pd.DataFrame(stats["bagels"][:15])
+            if not bb.empty:
+                bb = bb[["nom", "club", "bagels"]]
+                bb.columns = ["Joueur", "Club", "Bagels"]
+                st.dataframe(bb, hide_index=True, width='stretch')
+
+        st.divider()
+        c3, c4 = st.columns(2)
+        with c3:
+            st.markdown("**🎖️ Les plus assidus**")
+            aa = pd.DataFrame(stats["assidus_joueurs"][:15])
+            aa.columns = ["Joueur", "Club", "Tournois"]
+            st.dataframe(aa, hide_index=True, width='stretch')
+        with c4:
+            st.markdown("**⚖️ Clubs les plus performants** (points / joueur)")
+            cd = pd.DataFrame(stats["club_depth"])
+            cd = cd[["club", "joueurs", "total", "par_joueur"]]
+            cd.columns = ["Club", "Joueurs", "Total", "Pts/joueur"]
+            st.dataframe(cd, hide_index=True, width='stretch')
+
+        st.divider()
+        st.markdown(f"**💥 Tous les exploits** ({len(stats['giant_kills'])} "
+                    "victoires contre un mieux classé)")
+        if stats["giant_kills"]:
+            gk = pd.DataFrame(stats["giant_kills"])[
+                ["nom_g", "clt_g", "nom_p", "clt_p", "score", "tournoi"]]
+            gk.columns = ["Vainqueur", "Clt", "Adversaire", "Clt adv.",
+                          "Score", "Tournoi"]
+            st.dataframe(gk, hide_index=True, width='stretch')
+
+# ── Fiche joueur ─────────────────────────────────────────────────────────────
+with tab_fiche:
+    options = {f"{d['nom']} {d['prenom']} — {d['club']}": d["licence"]
+               for d in sorted(resultats, key=lambda x: (x["nom"], x["prenom"]))}
+    if not options:
+        st.info("Aucun joueur.")
+    else:
+        choix = st.selectbox("Rechercher un joueur", list(options.keys()),
+                             key="fiche_select")
+        lic = options[choix]
+        fj = cs.fiche_joueur(lic, resultats, match_records,
+                             ss["tournois_data"], ORDRE_IDS)
+        d = fj["joueur"]
+        # rang dans sa série
+        meme = sorted([r for r in resultats
+                       if r["genre"] == d["genre"] and r["serie"] == d["serie"]],
+                      key=lambda r: -r["total"])
+        rang = next((i + 1 for i, r in enumerate(meme)
+                     if r["licence"] == lic), None)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total", f"{d['total']:g} pts")
+        k2.metric("Rang série", f"{rang} / {len(meme)}" if rang else "—")
+        k3.metric("Tournois", d["nb_tournois"])
+        k4.metric("% jeux gagnés",
+                  f"{dom_par_lic.get(lic, '—')}" + ("%" if lic in dom_par_lic else ""))
+
+        st.caption(f"{d['serie']} série {d['genre']} · "
+                   f"classement {d['classement_inscription']} → "
+                   f"{d['classement_actuel']}")
+
+        cpt = pd.DataFrame(fj["par_tournoi"])
+        if not cpt.empty:
+            cpt["tournoi"] = cpt["tournoi"].map(lambda i: NOM_PAR_ID.get(i, i))
+            st.markdown("**Points par tournoi**")
+            st.bar_chart(cpt.set_index("tournoi")["points"])
+
+        if fj["matchs"]:
+            st.markdown("**Tous les matchs**")
+            mm = pd.DataFrame(fj["matchs"])
+            mm["tournoi"] = mm["tournoi"].map(lambda i: NOM_PAR_ID.get(i, i))
+            mm = mm[["tournoi", "resultat", "adversaire", "clt_adv", "score"]]
+            mm.columns = ["Tournoi", "Résultat", "Adversaire", "Clt adv.", "Score"]
+            st.dataframe(mm, hide_index=True, width='stretch')
+
+        # Image fiche (admin)
+        if ss["est_admin"]:
+            try:
+                import challenge_images as ci_f
+                if st.button("🖼️ Générer la carte de ce joueur (story)"):
+                    fiche_img = {
+                        "nom": d["nom"], "prenom": d["prenom"], "club": d["club"],
+                        "serie": d["serie"], "genre": d["genre"], "rang": rang,
+                        "clt_inscription": d["classement_inscription"],
+                        "clt_actuel": d["classement_actuel"],
+                        "nb_tournois": d["nb_tournois"],
+                        "victoires": int(d["points_match"] // 2),
+                        "points_match": d["points_match"], "bonus": d["bonus"],
+                        "total": d["total"], "domination": dom_par_lic.get(lic),
+                    }
+                    noms_t = [ss["tournois_meta"][t]["nom"]
+                              for t in ORDRE_IDS if t in ss["tournois_meta"]]
+                    b = ci_f.image_fiche_joueur(fiche_img, noms_t, "story")
+                    st.image(b, width='stretch')
+                    st.download_button("⬇️ Télécharger la carte",
+                                       data=b,
+                                       file_name=f"fiche_{d['nom']}_{d['prenom']}.png",
+                                       mime="image/png")
+            except ImportError:
+                pass
+
+# ── Course au master ─────────────────────────────────────────────────────────
+with tab_course:
+    st.caption("Évolution des points cumulés tournoi après tournoi.")
+    cc1, cc2, cc3 = st.columns(3)
+    with cc1:
+        g_course = st.selectbox("Genre", ["Hommes", "Femmes"], key="course_g")
+    with cc2:
+        series_course = sorted(
+            {d["serie"] for d in resultats if d["genre"] == g_course and d["serie"]},
+            key=lambda s: {"1re": 0, "2e": 1, "3e": 2, "4e": 3}.get(s, 9))
+        s_course = st.selectbox("Série", series_course, key="course_s") \
+            if series_course else None
+    with cc3:
+        n_course = st.number_input("Nb joueurs suivis", 2, 15, 6, key="course_n")
+
+    if s_course:
+        groupe = [d for d in resultats
+                  if d["genre"] == g_course and d["serie"] == s_course]
+        groupe = sorted(groupe, key=lambda d: -d["total"])[:int(n_course)]
+        serie_lic = {d["licence"]: d["serie"] for d in groupe}
+        ordre_t, courbes = cs.course_master(ss["tournois_data"], ORDRE_IDS, serie_lic)
+        if ordre_t:
+            noms_t = [NOM_PAR_ID.get(t, t) for t in ordre_t]
+            data_courbe = {}
+            for d in groupe:
+                data_courbe[f"{d['nom']} {d['prenom']}"] = courbes[d["licence"]]
+            chart_df = pd.DataFrame(data_courbe, index=noms_t)
+            st.line_chart(chart_df)
+            if ss["n_master"] and len(groupe) >= ss["n_master"]:
+                seuil = groupe[ss["n_master"] - 1]["total"]
+                st.caption(f"Seuil de qualification master (top {ss['n_master']}) "
+                           f"≈ {seuil:g} pts")
+        else:
+            st.info("Pas encore de tournoi importé.")
+
+# ── Comparateur ──────────────────────────────────────────────────────────────
+with tab_comp:
+    opts = {f"{d['nom']} {d['prenom']} — {d['club']}": d["licence"]
+            for d in sorted(resultats, key=lambda x: (x["nom"], x["prenom"]))}
+    if len(opts) < 2:
+        st.info("Il faut au moins deux joueurs.")
+    else:
+        keys = list(opts.keys())
+        col1, col2 = st.columns(2)
+        with col1:
+            j1 = st.selectbox("Joueur 1", keys, key="comp1")
+        with col2:
+            j2 = st.selectbox("Joueur 2", keys,
+                              index=min(1, len(keys) - 1), key="comp2")
+        d1 = next(r for r in resultats if r["licence"] == opts[j1])
+        d2 = next(r for r in resultats if r["licence"] == opts[j2])
+
+        comp = pd.DataFrame({
+            "Critère": ["Club", "Genre", "Série", "Clt inscription",
+                        "Clt actuel", "Tournois", "Pts match", "Bonus",
+                        "Total", "% jeux gagnés"],
+            d1["nom"] + " " + d1["prenom"]: [
+                str(d1["club"]), str(d1["genre"]), str(d1["serie"]),
+                str(d1["classement_inscription"]), str(d1["classement_actuel"]),
+                str(d1["nb_tournois"]), f"{d1['points_match']:g}", str(d1["bonus"]),
+                f"{d1['total']:g}", str(dom_par_lic.get(opts[j1], "—"))],
+            d2["nom"] + " " + d2["prenom"]: [
+                str(d2["club"]), str(d2["genre"]), str(d2["serie"]),
+                str(d2["classement_inscription"]), str(d2["classement_actuel"]),
+                str(d2["nb_tournois"]), f"{d2['points_match']:g}", str(d2["bonus"]),
+                f"{d2['total']:g}", str(dom_par_lic.get(opts[j2], "—"))],
+        })
+        st.dataframe(comp, hide_index=True, width='stretch')
 
 
 # ── Détail / export (admin seulement) ────────────────────────────────────────
@@ -551,8 +778,11 @@ if tab_img is not None:
         with ci2:
             img_fmt = st.selectbox("Format", [
                 "social  (1080×1080 — WhatsApp / réseaux)",
-                "print   (A4 300 dpi — impression)"])
-            fmt_key = "social" if img_fmt.startswith("social") else "print"
+                "print   (A4 300 dpi — impression)",
+                "story   (1080×1920 — story verticale)"])
+            fmt_key = ("social" if img_fmt.startswith("social")
+                       else "print" if img_fmt.startswith("print")
+                       else "story")
         with ci3:
             top_n_img = st.number_input("Nb joueurs affichés",
                                         min_value=3, max_value=30,
@@ -651,3 +881,25 @@ if tab_img is not None:
                     file_name=(f"challenge_{ss['annee_active']}"
                                f"_{bulk_key}.zip"),
                     mime="application/zip")
+
+        # ── QR code de partage de la vue publique ───────────────────────────
+        st.divider()
+        st.subheader("🔗 QR code de partage")
+        st.caption("Collez l'adresse publique de l'appli pour générer un QR "
+                   "code à afficher au club.")
+        url_pub = st.text_input("Adresse publique (URL)",
+                                placeholder="https://...")
+        if st.button("Générer le QR code") and url_pub:
+            try:
+                import qrcode
+                img = qrcode.make(url_pub)
+                qbuf = io.BytesIO()
+                img.save(qbuf, format="PNG")
+                qbuf.seek(0)
+                st.image(qbuf.getvalue(), width=300)
+                st.download_button("⬇️ Télécharger le QR code",
+                                   data=qbuf.getvalue(),
+                                   file_name="qr_challenge.png",
+                                   mime="image/png")
+            except ImportError:
+                st.error("Module qrcode absent : pip install \"qrcode[pil]\"")
