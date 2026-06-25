@@ -257,14 +257,27 @@ def compute_standings(tournois_data, ordre_ids, participation="joue",
                      (participation == "joue" and info["a_joue"])
 
             serie_now = info["serie"]
+            # Rang de force des séries : plus le rang est petit, plus la série
+            # est forte (1re=0, 2e=1, 3e=2, 4e=3). Une "montée" = passage vers
+            # une série plus forte (rang qui diminue).
+            rang_force = {"1re": 0, "2e": 1, "3e": 2, "4e": 3}
             change = (serie_courante is not None and serie_now is not None
                       and serie_now != serie_courante)
-            if change:
+            montee = (change
+                      and rang_force.get(serie_now, 99)
+                      < rang_force.get(serie_courante, 99))
+            if change and montee:
+                # Règle appliquée uniquement en cas de MONTÉE de classement
                 avant = points_match
                 points_match = _arrondi_moitie(points_match, mode_arrondi)
                 detail.append(
-                    f"{tid}: changement {serie_courante}->{serie_now}, "
-                    f"points {avant:g}->{points_match:g}")
+                    f"{tid}: MONTÉE {serie_courante}->{serie_now}, "
+                    f"points divisés {avant:g}->{points_match:g}")
+            elif change:
+                # Descente : on conserve l'intégralité des points
+                detail.append(
+                    f"{tid}: descente {serie_courante}->{serie_now}, "
+                    f"points conservés ({points_match:g})")
             if serie_now is not None:
                 serie_courante = serie_now
 
