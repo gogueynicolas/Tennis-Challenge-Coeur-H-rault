@@ -680,16 +680,20 @@ with tab_stats:
         st.divider()
         st.markdown("**🚫 Joueurs des clubs hors challenge** "
                     "(écartés à l'import, par club)")
-        hors = cs.clubs_hors_challenge(ss["tournois_meta"])
-        if hors:
-            hdf = pd.DataFrame([{"Club": d["club"], "Présences (total)": d["total"]}
-                                for d in hors])
-            st.dataframe(hdf, hide_index=True, width='stretch')
-            st.caption(f"{len(hors)} clubs hors challenge · "
-                       f"{sum(d['total'] for d in hors)} présences écartées au total. "
-                       "Une présence = un joueur inscrit à un tournoi.")
+        if hasattr(cs, "clubs_hors_challenge"):
+            hors = cs.clubs_hors_challenge(ss["tournois_meta"])
+            if hors:
+                hdf = pd.DataFrame([{"Club": d["club"],
+                                     "Présences (total)": d["total"]}
+                                    for d in hors])
+                st.dataframe(hdf, hide_index=True, width='stretch')
+                st.caption(f"{len(hors)} clubs hors challenge · "
+                           f"{sum(d['total'] for d in hors)} présences écartées "
+                           "au total. Une présence = un joueur inscrit à un tournoi.")
+            else:
+                st.caption("Aucun joueur hors challenge écarté.")
         else:
-            st.caption("Aucun joueur hors challenge écarté.")
+            st.warning("Mettez à jour challenge_stats.py pour cette statistique.")
 
 # ── Fiche joueur ─────────────────────────────────────────────────────────────
 with tab_fiche:
@@ -834,8 +838,17 @@ with tab_comp:
 
 # ── Historique multi-années ──────────────────────────────────────────────────
 with tab_hist:
-    historique = charger_historique_complet()
-    if len(historique) < 1:
+    if not hasattr(cs, "palmares_multi_annees"):
+        st.warning("La version de challenge_stats.py déployée n'inclut pas "
+                   "encore l'historique multi-années. Mettez à jour ce fichier "
+                   "sur votre dépôt pour activer cet onglet.")
+        historique = {}
+    else:
+        historique = charger_historique_complet()
+
+    if not hasattr(cs, "palmares_multi_annees"):
+        pass
+    elif len(historique) < 1:
         st.info("Aucune saison archivée pour l'instant. "
                 "L'historique se remplit automatiquement à chaque saison.")
     else:
