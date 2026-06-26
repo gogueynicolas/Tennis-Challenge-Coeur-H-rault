@@ -60,34 +60,9 @@ def verifier_mdp(mdp: str) -> bool:
 
 
 # ============================================================================
-# Sauvegarde / chargement automatique  (dossier data/ + sauvegardes de secours)
+# Persistance durable  (Postgres/Supabase si configuré, sinon fichiers locaux)
 # ============================================================================
-DATA_DIR = "data"
-BACKUP_DIR = os.path.join(DATA_DIR, "backups")
-os.makedirs(BACKUP_DIR, exist_ok=True)
-
-
-def _fichier_sauvegarde(annee: int) -> str:
-    return os.path.join(DATA_DIR, f"challenge_{annee}.json")
-
-
-def _migrer_anciens_fichiers():
-    """Déplace les anciens challenge_sauvegarde_AAAA.json à la racine vers data/."""
-    for fname in os.listdir("."):
-        if fname.startswith("challenge_sauvegarde_") and fname.endswith(".json"):
-            try:
-                a = int(fname.replace("challenge_sauvegarde_", "").replace(".json", ""))
-            except ValueError:
-                continue
-            dest = _fichier_sauvegarde(a)
-            if not os.path.exists(dest):
-                try:
-                    with open(fname, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    with open(dest, "w", encoding="utf-8") as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
+import challenge_storage as cstg
 
 
 def _etat_vide() -> dict:
@@ -105,59 +80,19 @@ def _etat_vide() -> dict:
 
 
 def charger_etat(annee: int) -> dict:
-    path = _fichier_sauvegarde(annee)
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return _etat_vide()
+    etat = cstg.charger(annee)
+    return etat if etat else _etat_vide()
 
 
 def sauvegarder_etat(etat: dict) -> None:
-    annee = etat.get("annee", ANNEE_EN_COURS)
-    path = _fichier_sauvegarde(annee)
     try:
-        # Sauvegarde de secours horodatée (max 10 par année conservées)
-        if os.path.exists(path):
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            bkp = os.path.join(BACKUP_DIR, f"challenge_{annee}_{ts}.json")
-            try:
-                os.replace(path, bkp) if False else None  # garder l'original
-                import shutil
-                shutil.copy2(path, bkp)
-                _nettoyer_backups(annee, garder=10)
-            except Exception:
-                pass
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(etat, f, ensure_ascii=False, indent=2)
+        cstg.sauver(etat.get("annee", ANNEE_EN_COURS), etat)
     except Exception as e:
         st.warning(f"Sauvegarde impossible : {e}")
 
 
-def _nettoyer_backups(annee: int, garder: int = 10):
-    prefixe = f"challenge_{annee}_"
-    fichiers = sorted([f for f in os.listdir(BACKUP_DIR)
-                       if f.startswith(prefixe)], reverse=True)
-    for f in fichiers[garder:]:
-        try:
-            os.remove(os.path.join(BACKUP_DIR, f))
-        except Exception:
-            pass
-
-
 def annees_archivees() -> list:
-    _migrer_anciens_fichiers()
-    annees = []
-    if os.path.isdir(DATA_DIR):
-        for fname in os.listdir(DATA_DIR):
-            if fname.startswith("challenge_") and fname.endswith(".json"):
-                try:
-                    annees.append(int(fname.replace("challenge_", "").replace(".json", "")))
-                except ValueError:
-                    pass
-    return sorted(set(annees), reverse=True)
+    return cstg.annees()
 
 
 def charger_historique_complet() -> dict:
@@ -167,7 +102,9 @@ def charger_historique_complet() -> dict:
     """
     hist = {}
     for annee in annees_archivees():
-        etat = charger_etat(annee)
+        etat = cstg.charger(annee)
+        if not etat:
+            continue
         td = etat.get("tournois_data", {})
         if not td:
             continue
@@ -259,6 +196,12 @@ with st.sidebar:
 
     # ── Saison (visible dans les deux modes) ────────────────────────────────
     st.subheader("📅 Saison")
+    _bk = cstg.info_backend()
+    if _bk["backend"] == "postgres":
+        st.caption("🟢 Stockage durable : base Postgres")
+    else:
+        st.caption("🟠 Stockage local (éphémère sur le cloud) — "
+                   "configurez Postgres pour conserver les données")
     annees  = annees_archivees()
     toutes  = sorted(set(annees + [ANNEE_EN_COURS]), reverse=True)
     annee_choisie = st.selectbox(
@@ -362,7 +305,7 @@ with st.sidebar:
         st.download_button(
             "⬇️ Télécharger la sauvegarde",
             data=json.dumps(_etat_courant(), ensure_ascii=False, indent=2),
-            file_name=_fichier_sauvegarde(ss["annee_active"]),
+            file_name=f"challenge_{ss['annee_active']}.json",
             mime="application/json",
             width='stretch')
 
