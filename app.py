@@ -389,11 +389,13 @@ if ss["est_admin"] and not ss["mode_archive"]:
             data, rapport = cc.parse_tournoi(dj, dm, ss["clubs"],
                                              ss["serie_mapping"])
             m1, m2, m3 = st.columns(3)
-            m1.metric("Joueurs retenus",  rapport["nb_joueurs_challenge"])
-            m2.metric("Matchs",           rapport["nb_matchs"])
-            m3.metric("Clubs supprimés",  sum(rapport["clubs_supprimes"].values()))
+            m1.metric("Joueurs (total)", rapport.get("nb_joueurs_total",
+                                                     rapport["nb_joueurs_challenge"]))
+            m2.metric("Dont clubs du challenge", rapport["nb_joueurs_challenge"])
+            m3.metric("Invités (hors challenge)",
+                      sum(rapport["clubs_supprimes"].values()))
             if rapport["clubs_supprimes"]:
-                with st.expander("Clubs hors challenge supprimés"):
+                with st.expander("Clubs hors challenge (joueurs conservés comme invités)"):
                     st.dataframe(
                         pd.DataFrame(
                             sorted(rapport["clubs_supprimes"].items(),
@@ -479,8 +481,10 @@ dom_par_lic = {d["licence"]: d["ratio"] for d in stats["domination"]} if stats e
 SERIES = ["2e", "3e", "4e", "1re"]
 
 
-def table_serie(genre: str, serie: str, club_filtre=None):
+def table_serie(genre: str, serie: str, club_filtre=None, challenge_only=False):
     sub = df[(df["genre"] == genre) & (df["serie"] == serie)].copy()
+    if challenge_only:
+        sub = sub[sub["dans_challenge"]]
     if club_filtre and club_filtre != "Tous les clubs":
         sub = sub[sub["club"] == club_filtre]
     if sub.empty:
@@ -488,10 +492,11 @@ def table_serie(genre: str, serie: str, club_filtre=None):
         return
     sub = sub.sort_values("total", ascending=False).reset_index(drop=True)
     sub.insert(0, "Rang", range(1, len(sub) + 1))
-    show = sub[["Rang", "nom", "prenom", "club",
+    sub["chall"] = sub["dans_challenge"].map(lambda b: "" if b else "invité")
+    show = sub[["Rang", "nom", "prenom", "club", "chall",
                 "classement_inscription", "classement_actuel",
                 "nb_tournois", "points_match", "bonus", "total"]]
-    show.columns = ["Rang", "Nom", "Prénom", "Club",
+    show.columns = ["Rang", "Nom", "Prénom", "Club", "",
                     "Clt inscription", "Clt actuel",
                     "Tournois", "Pts match", "Bonus", "Total"]
     st.dataframe(show, hide_index=True, width='stretch')
@@ -510,16 +515,23 @@ tab_detail = tabs[9] if ss["est_admin"] else None
 tab_img    = tabs[10] if ss["est_admin"] else None
 
 
-# ── Hommes / Femmes (avec filtre club) ──────────────────────────────────────
+# ── Hommes / Femmes (filtre club + option challenge uniquement) ──────────────
 def render_genre(tab, genre):
     with tab:
-        clubs_dispo = ["Tous les clubs"] + sorted(
-            {d["club"] for d in resultats if d["genre"] == genre})
-        cf = st.selectbox("Filtrer par club", clubs_dispo, key=f"cf_{genre}")
+        st.caption("Le classement individuel inclut tous les participants. "
+                   "Les joueurs des clubs hors challenge sont marqués « invité ».")
+        col_a, col_b = st.columns([2, 1])
+        with col_a:
+            clubs_dispo = ["Tous les clubs"] + sorted(
+                {d["club"] for d in resultats if d["genre"] == genre})
+            cf = st.selectbox("Filtrer par club", clubs_dispo, key=f"cf_{genre}")
+        with col_b:
+            chall_only = st.checkbox("Clubs du challenge uniquement",
+                                     key=f"chall_{genre}")
         for s in SERIES:
             if not df[(df["genre"] == genre) & (df["serie"] == s)].empty:
                 st.subheader(f"{s} série")
-                table_serie(genre, s, cf)
+                table_serie(genre, s, cf, chall_only)
 
 
 render_genre(tab_h, "Hommes")
@@ -535,7 +547,9 @@ with tab_clubs:
 
 # ── Master ───────────────────────────────────────────────────────────────────
 with tab_master:
-    st.caption(f"Top {ss['n_master']} par genre et par série.")
+    st.caption(f"Top {ss['n_master']} par genre et par série — "
+               "clubs du challenge uniquement (les invités ne disputent "
+               "pas le master).")
     master = cc.selection_master(resultats, ss["n_master"])
     for genre in ["Hommes", "Femmes"]:
         for s in SERIES:

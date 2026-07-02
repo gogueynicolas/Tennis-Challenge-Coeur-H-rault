@@ -146,22 +146,26 @@ def parse_tournoi(df_joueurs, df_matchs, challenge_clubs=None,
     serie_mapping = serie_mapping or SERIE_MAPPING_DEFAUT
     clubs_ok = {norm_club(c) for c in challenge_clubs}
 
-    # --- 1. Joueurs du challenge ------------------------------------------
+    # --- 1. Tous les joueurs (challenge ET invités) ----------------------
+    #     Les joueurs hors challenge sont conservés pour le classement
+    #     INDIVIDUEL, mais marqués dans_challenge=False (ils seront exclus
+    #     du seul classement des clubs).
     joueurs = {}            # licence -> infos
-    clubs_supprimes = {}    # club -> nb joueurs supprimés
+    clubs_hors = {}         # club hors challenge -> nb joueurs
     for _, r in df_joueurs.iterrows():
         lic = norm_licence(r.get("Licence"))
-        club_raw = norm_text(r.get("Club"))
-        if norm_club(club_raw) not in clubs_ok:
-            clubs_supprimes[club_raw] = clubs_supprimes.get(club_raw, 0) + 1
-            continue
         if not lic:
             continue
+        club_raw = norm_text(r.get("Club"))
+        dans = norm_club(club_raw) in clubs_ok
+        if not dans:
+            clubs_hors[club_raw] = clubs_hors.get(club_raw, 0) + 1
         clt = norm_clt(r.get("Classement inscription"))
         joueurs[lic] = {
             "nom": norm_text(r.get("Nom")),
             "prenom": norm_text(r.get("Prénom")),
             "club": club_raw,
+            "dans_challenge": dans,
             "classement": clt,
             "serie": classement_to_serie(clt, serie_mapping),
             "genre": genre_from_epreuve(r.get("Epreuve")),
@@ -175,11 +179,9 @@ def parse_tournoi(df_joueurs, df_matchs, challenge_clubs=None,
         res = norm_text(r.get("Résultat")).upper()
         lic_j1 = norm_licence(r.get("Licence J1"))
         lic_j3 = norm_licence(r.get("Licence J3"))
-        # Joueurs présents -> marquer "a joué"
         for lic in (lic_j1, lic_j3):
             if lic in joueurs:
                 joueurs[lic]["a_joue"] = True
-        # Vainqueur : V -> J1, D -> J3
         if res == "V":
             gagnant = lic_j1
         elif res == "D":
@@ -190,9 +192,11 @@ def parse_tournoi(df_joueurs, df_matchs, challenge_clubs=None,
         if gagnant in joueurs:
             joueurs[gagnant]["victoires"] += 1
 
+    nb_challenge = sum(1 for v in joueurs.values() if v["dans_challenge"])
     rapport = {
-        "nb_joueurs_challenge": len(joueurs),
-        "clubs_supprimes": clubs_supprimes,
+        "nb_joueurs_challenge": nb_challenge,
+        "nb_joueurs_total": len(joueurs),
+        "clubs_supprimes": clubs_hors,   # clé conservée pour compatibilité
         "matchs_ignores": matchs_ignores,
         "nb_matchs": len(df_matchs),
     }
@@ -299,6 +303,7 @@ def compute_standings(tournois_data, ordre_ids, participation="joue",
             "nom": derniere_info["nom"],
             "prenom": derniere_info["prenom"],
             "club": derniere_info["club"],
+            "dans_challenge": derniere_info.get("dans_challenge", True),
             "genre": genre,
             "serie": serie_courante,
             "nb_tournois": nb_participations,
@@ -319,9 +324,11 @@ def compute_standings(tournois_data, ordre_ids, participation="joue",
         d["nom"],
     ))
 
-    # Classement clubs (bonus compris)
+    # Classement clubs (bonus compris) — UNIQUEMENT les clubs du challenge
     clubs = {}
     for d in resultats:
+        if not d.get("dans_challenge", True):
+            continue
         c = d["club"]
         if c not in clubs:
             clubs[c] = {"club": c, "total": 0.0, "nb_joueurs": 0,
@@ -339,10 +346,16 @@ def compute_standings(tournois_data, ordre_ids, participation="joue",
     return resultats, clubs_list
 
 
-def selection_master(resultats, n_par_serie=8):
-    """Top n par (genre, série) pour constituer les tableaux du master."""
+def selection_master(resultats, n_par_serie=8, challenge_only=True):
+    """
+    Top n par (genre, série) pour constituer les tableaux du master.
+    challenge_only=True : seuls les joueurs des clubs du challenge sont
+    éligibles (les invités hors challenge ne disputent pas le master).
+    """
     groupes = {}
     for d in resultats:
+        if challenge_only and not d.get("dans_challenge", True):
+            continue
         key = (d["genre"], d["serie"])
         groupes.setdefault(key, []).append(d)
     master = {}
