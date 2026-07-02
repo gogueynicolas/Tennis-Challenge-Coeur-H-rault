@@ -483,6 +483,8 @@ SERIES = ["2e", "3e", "4e", "1re"]
 
 def table_serie(genre: str, serie: str, club_filtre=None, challenge_only=False):
     sub = df[(df["genre"] == genre) & (df["serie"] == serie)].copy()
+    if "dans_challenge" not in sub.columns:
+        sub["dans_challenge"] = True   # compat. anciennes données / core périmé
     if challenge_only:
         sub = sub[sub["dans_challenge"]]
     if club_filtre and club_filtre != "Tous les clubs":
